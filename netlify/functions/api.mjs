@@ -159,6 +159,83 @@ const pick = (e) => e && {
   eur: e.eur, rsd: e.rsd, date: e.date, note: e.note, student: e.student, tag: e.tag,
 };
 
+// ---------- Discord ----------
+// Env: DISCORD_WEBHOOK_URL (Discord kanal → Edit Channel → Integrations → Webhooks → Copy URL)
+const NAME_ACC = { dusan: "Dušana", pavle: "Pavla" };
+const nfDisc = new Intl.NumberFormat("sr-Latn-RS", { maximumFractionDigits: 2 });
+const nfDisc0 = new Intl.NumberFormat("sr-Latn-RS", { maximumFractionDigits: 0 });
+const dmy = (iso) => { const [y, m, d] = iso.split("-").map(Number); return `${d}.${m}.${y}.`; };
+const amt = (e) => `${nfDisc.format(e.amount)} ${e.currency === "EUR" ? "eur" : "din"}`;
+const both = (eur, rsd) => `**${nfDisc.format(Math.round(eur * 100) / 100)} €** · ${nfDisc0.format(Math.round(rsd))} RSD`;
+
+function line(e) {
+  if (!e) return "";
+  const sign = e.type === "income" ? "" : "−";
+  const parts = [`${sign}${amt(e)}`];
+  if (e.type === "income" && e.student) parts.push(e.student);
+  if (e.type !== "income" && e.note) parts.push(e.note);
+  parts.push(dmy(e.date));
+  let s = parts.join(" - ");
+  const extra = e.type === "income" ? e.tag : e.type === "shared" ? "zajednički trošak, pola-pola" : `za ${NAME_ACC[e.person]}`;
+  if (extra) s += ` (${extra})`;
+  if (e.type === "income" && e.note) s += ` · ${e.note}`;
+  return s;
+}
+
+function totals(entries) {
+  const t = { inE: 0, inR: 0, shE: 0, shR: 0, dE: 0, dR: 0, pE: 0, pR: 0 };
+  for (const e of entries) {
+    if (e.type === "income") { t.inE += e.eur; t.inR += e.rsd; }
+    else if (e.type === "shared") { t.shE += e.eur; t.shR += e.rsd; }
+    else if (e.person === "dusan") { t.dE += e.eur; t.dR += e.rsd; }
+    else { t.pE += e.eur; t.pR += e.rsd; }
+  }
+  const d = { eur: t.inE / 2 - t.shE / 2 - t.dE, rsd: t.inR / 2 - t.shR / 2 - t.dR };
+  const p = { eur: t.inE / 2 - t.shE / 2 - t.pE, rsd: t.inR / 2 - t.shR / 2 - t.pR };
+  return { inE: t.inE, inR: t.inR, d, p, pot: { eur: d.eur + p.eur, rsd: d.rsd + p.rsd } };
+}
+
+async function discord(req, { action, by, entry, before, entries }) {
+  const hook = env("DISCORD_WEBHOOK_URL");
+  if (!hook || !/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\//.test(hook)) return;
+  const who = USERS[by]?.name || by;
+  let content;
+  if (action === "add") content = line(entry);
+  else if (action === "edit") content = `✏️ ${who} izmenio: ~~${line(before)}~~ → ${line(entry)}`;
+  else if (action === "delete") content = `🗑️ ${who} obrisao: ~~${line(before)}~~`;
+  else if (action === "restore") content = `↩️ ${who} vratio: ${line(entry)}`;
+  else if (action === "test") content = "✅ Pakz Kasa je povezana sa ovim kanalom.";
+  const t = totals(entries);
+  const color = action === "add" && entry?.type === "income" ? 0x3ee0a1 : action === "add" ? 0xff7a9a : 0x7b3cf0;
+  const origin = new URL(req.url).origin;
+  const body = {
+    username: "Pakz Kasa",
+    avatar_url: `${origin}/logo.jpg`,
+    content,
+    allowed_mentions: { parse: [] },
+    embeds: [{
+      color,
+      fields: [
+        { name: "Ukupno zarađeno", value: both(t.inE, t.inR), inline: false },
+        { name: "Dušan", value: both(t.d.eur, t.d.rsd), inline: true },
+        { name: "Pavle", value: both(t.p.eur, t.p.rsd), inline: true },
+        { name: "U kasi", value: both(t.pot.eur, t.pot.rsd), inline: true },
+      ],
+      footer: { text: `${action === "add" ? "Upisao" : "Promena"}: ${who}${entry?.rate ? ` · kurs 1 € = ${nfDisc.format(entry.rate)} RSD` : ""}` },
+      url: origin,
+      title: "Otvori Pakz Kasu",
+    }],
+  };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const r = await fetch(hook + "?wait=true", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal });
+    if (!r.ok) console.error("discord", r.status, await r.text().catch(() => ""));
+    return r.ok;
+  } catch (e) { console.error("discord", e?.message); return false; }
+  finally { clearTimeout(timer); }
+}
+
 // ---------- Handler ----------
 export default async (req) => {
   const url = new URL(req.url);
@@ -193,6 +270,13 @@ export default async (req) => {
     if (path === "state" && method === "GET") {
       const { data } = await load();
       return json({ version: data.version, entries: data.entries, log: data.log.slice(-300).reverse(), me });
+    }
+
+    if (path === "discord-test" && method === "POST") {
+      if (!env("DISCORD_WEBHOOK_URL")) return json({ error: "DISCORD_WEBHOOK_URL nije podešen na Netlify-u." }, 400);
+      const { data } = await load();
+      const ok = await discord(req, { action: "test", by: me, entries: data.entries });
+      return ok ? json({ ok: true }) : json({ error: "Discord je odbio poruku — proveri webhook URL." }, 502);
     }
 
     if (path === "export" && method === "GET") {
@@ -234,6 +318,7 @@ export default async (req) => {
           return { entry: e };
         });
         if (out.error) return json({ error: out.error }, out.status || 400);
+        await discord(req, { action: "add", by: me, entry: out.result.entry, entries: out.data.entries });
         return json({ ok: true, entry: out.result.entry, version: out.data.version });
       }
 
@@ -248,9 +333,10 @@ export default async (req) => {
           const e = { ...n.entry, id, createdBy: prev.createdBy, createdAt: prev.createdAt, updatedBy: me, updatedAt: now };
           data.entries[i] = e;
           data.log.push({ id: crypto.randomUUID(), at: now, by: me, action: "edit", before: pick(prev), after: pick(e) });
-          return { entry: e };
+          return { entry: e, prev };
         });
         if (out.error) return json({ error: out.error }, out.status || 400);
+        await discord(req, { action: "edit", by: me, entry: out.result.entry, before: out.result.prev, entries: out.data.entries });
         return json({ ok: true, entry: out.result.entry, version: out.data.version });
       }
 
@@ -260,9 +346,10 @@ export default async (req) => {
           if (i < 0) return { error: "Stavka ne postoji.", status: 404 };
           const [prev] = data.entries.splice(i, 1);
           data.log.push({ id: crypto.randomUUID(), at: now, by: me, action: "delete", before: pick(prev), full: prev });
-          return {};
+          return { prev };
         });
         if (out.error) return json({ error: out.error }, out.status || 400);
+        await discord(req, { action: "delete", by: me, before: out.result.prev, entries: out.data.entries });
         return json({ ok: true, version: out.data.version });
       }
 
@@ -274,9 +361,10 @@ export default async (req) => {
           if (data.entries.some((e) => e.id === logItem.full.id)) return { error: "Stavka je već vraćena.", status: 409 };
           data.entries.push(logItem.full);
           data.log.push({ id: crypto.randomUUID(), at: now, by: me, action: "restore", after: pick(logItem.full) });
-          return {};
+          return { entry: logItem.full };
         });
         if (out.error) return json({ error: out.error }, out.status || 400);
+        await discord(req, { action: "restore", by: me, entry: out.result.entry, entries: out.data.entries });
         return json({ ok: true, version: out.data.version });
       }
     }

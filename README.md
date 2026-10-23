@@ -18,5 +18,6 @@ Site configuration → Environment variables:
 | `DUSAN_PASSWORD` | Dušanova šifra |
 | `PAVLE_PASSWORD` | Pavlova šifra |
 | `SESSION_SECRET` | dugačak nasumičan tekst |
+| `DISCORD_WEBHOOK_URL` | (opciono) webhook Discord kanala — svaka uplata, trošak, izmena i brisanje se šalje u kanal |
 
 Podaci se čuvaju u Netlify Blobs (store `pakz-kasa`). Build komanda nije potrebna, publish folder je `public`.

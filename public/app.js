@@ -710,6 +710,11 @@ $$(".topbar .cur-toggle button").forEach((b) => b.addEventListener("click", () =
 $("#soundBtn").addEventListener("click", () => { S.sound = !S.sound; store.set("sound", S.sound); renderTop(); if (S.sound) sound("coin"); });
 $("#meBtn").addEventListener("click", () => { const m = $("#meMenu"); m.hidden = !m.hidden; $("#meBtn").setAttribute("aria-expanded", String(!m.hidden)); });
 $("#logoutBtn").addEventListener("click", () => logout());
+$("#discordBtn").addEventListener("click", async () => {
+  $("#meMenu").hidden = true;
+  try { await api("discord-test", { method: "POST", body: "{}" }); toast("Discord radi", "Test poruka je poslata u kanal", "ok", "zap"); }
+  catch (e) { toast("Discord nije podešen", esc(e.message), "err", "alert"); }
+});
 $("#exportBtn").addEventListener("click", async () => {
   try {
     const blob = await api("export");
