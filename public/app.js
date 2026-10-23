@@ -654,7 +654,7 @@ function showApp() {
 function logout(expired) {
   S.token = null; S.me = null; S.version = -1; S.entries = []; S.log = [];
   store.del("token"); store.del("me");
-  $("#app").hidden = true; $("#login").hidden = false;
+  $("#app").hidden = true; showLogin();
   $$("#cardDusan, #cardPavle").forEach((el) => { el.dataset.built = ""; el.innerHTML = ""; });
   if (expired) $("#loginError").textContent = "Sesija je istekla, uloguj se ponovo.";
 }
@@ -696,7 +696,8 @@ document.addEventListener("click", (ev) => {
   if (!ev.target.closest(".menu-wrap")) { $("#meMenu").hidden = true; $("#meBtn").setAttribute("aria-expanded", "false"); }
 });
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && !$("#modal").hidden) closeModal();
+  if (ev.key === "Escape" && !$("#mini").hidden) closeMini();
+  else if (ev.key === "Escape" && !$("#modal").hidden) closeModal();
   if (ev.key === "Enter" && ev.target.matches(".entry[data-id]")) ev.target.click();
   if ((ev.key === "n" || ev.key === "N") && !ev.target.matches("input, textarea") && $("#modal").hidden && !$("#app").hidden) { ev.preventDefault(); openModal(); }
 });
@@ -710,10 +711,66 @@ $$(".topbar .cur-toggle button").forEach((b) => b.addEventListener("click", () =
 $("#soundBtn").addEventListener("click", () => { S.sound = !S.sound; store.set("sound", S.sound); renderTop(); if (S.sound) sound("coin"); });
 $("#meBtn").addEventListener("click", () => { const m = $("#meMenu"); m.hidden = !m.hidden; $("#meBtn").setAttribute("aria-expanded", String(!m.hidden)); });
 $("#logoutBtn").addEventListener("click", () => logout());
-$("#discordBtn").addEventListener("click", async () => {
+// ---------- mali dijalog ----------
+let miniSubmit = null;
+function openMini(title, body, actions, onSubmit) {
   $("#meMenu").hidden = true;
-  try { await api("discord-test", { method: "POST", body: "{}" }); toast("Discord radi", "Test poruka je poslata u kanal", "ok", "zap"); }
-  catch (e) { toast("Discord nije podešen", esc(e.message), "err", "alert"); }
+  $("#miniTitle").textContent = title;
+  $("#miniBody").innerHTML = body;
+  $("#miniActions").innerHTML = actions;
+  $("#miniError").textContent = "";
+  miniSubmit = onSubmit;
+  $("#mini").hidden = false;
+  setTimeout(() => $("#miniBody input")?.focus(), 60);
+}
+const closeMini = () => { $("#mini").hidden = true; miniSubmit = null; };
+$("#miniForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const btn = ev.submitter || $("#miniActions .primary");
+  if (!miniSubmit) return;
+  btn && (btn.disabled = true);
+  try { await miniSubmit(btn?.value || "save"); } catch (e) { $("#miniError").textContent = e.message; }
+  finally { btn && (btn.disabled = false); }
+});
+document.addEventListener("click", (ev) => { if (ev.target.closest("[data-mini-close]")) closeMini(); });
+
+$("#discordBtn").addEventListener("click", async () => {
+  let st = { discord: false };
+  try { st = await api("settings"); } catch {}
+  openMini("Discord kanal", `
+    <span class="status-pill ${st.discord ? "on" : "off"}">${st.discord ? `Povezano ${esc(st.discordHint || "")}` : "Nije povezano"}</span>
+    <p class="mini-text">Svaka nova uplata, trošak, izmena i brisanje stiže u kanal, sa stanjem ko koliko ima.</p>
+    ${st.discordFromEnv ? `<p class="mini-text">Link je podešen na Netlify-u.</p>` : `
+    <ol class="mini-steps"><li>Discord kanal → ⚙️ Edit Channel → Integrations → Webhooks</li><li>New Webhook → <b>Copy Webhook URL</b></li><li>Nalepi ga ovde i sačuvaj</li></ol>
+    <label class="field"><span class="field-label">Webhook link</span>
+      <input id="hookInput" type="password" autocomplete="off" placeholder="${st.discord ? "Nalepi novi link da ga zameniš" : "https://discord.com/api/webhooks/…"}" /></label>`}`,
+    `${st.discord ? `<button type="submit" class="btn ghost" value="test">${icon("zap")}Pošalji test</button>` : ""}
+     ${st.discordFromEnv ? "" : `<button type="submit" class="btn primary grow" value="save"><span>Sačuvaj</span></button>`}`,
+    async (action) => {
+      if (action === "test") {
+        await api("discord-test", { method: "POST", body: "{}" });
+        toast("Discord radi", "Test poruka je poslata u kanal", "ok", "zap");
+        return closeMini();
+      }
+      const v = $("#hookInput").value.trim();
+      if (!v) throw new Error("Nalepi webhook link.");
+      await api("settings", { method: "POST", body: JSON.stringify({ discordWebhook: v }) });
+      await api("discord-test", { method: "POST", body: "{}" }).catch(() => {});
+      closeMini();
+      toast("Discord povezan", "Poslao sam test poruku u kanal", "ok", "zap"); confetti(0.7); sound("coin");
+    });
+});
+
+$("#pwBtn").addEventListener("click", () => {
+  openMini("Promeni šifru", `
+    <p class="mini-text">Menjaš šifru za <b>${USERS[S.me]}</b>.</p>
+    <label class="field"><span class="field-label">Trenutna šifra</span><input id="pwCur" type="password" autocomplete="current-password" /></label>
+    <label class="field"><span class="field-label">Nova šifra</span><input id="pwNew" type="password" autocomplete="new-password" minlength="6" /></label>`,
+    `<button type="submit" class="btn primary grow"><span>Sačuvaj šifru</span></button>`,
+    async () => {
+      await api("password", { method: "POST", body: JSON.stringify({ current: $("#pwCur").value, next: $("#pwNew").value }) });
+      closeMini(); toast("Šifra promenjena", "Važi od sledećeg logina", "ok", "lock");
+    });
 });
 $("#exportBtn").addEventListener("click", async () => {
   try {
@@ -765,4 +822,34 @@ setInterval(() => { if (S.token && !$("#tab-log").hidden) renderLog(); }, 60000)
 // ================= boot =================
 const lastUser = store.get("lastUser", "dusan");
 const lu = $(`#loginForm input[value="${lastUser}"]`); if (lu) lu.checked = true;
-if (S.token && S.me) showApp(); else $("#login").hidden = false;
+async function showLogin() {
+  $("#login").hidden = false;
+  try {
+    const st = await api("setup");
+    $("#setupForm").hidden = !st.needsSetup;
+    $("#loginForm").hidden = !!st.needsSetup;
+    $(".login-sub").textContent = st.needsSetup ? "Dobrodošao — još samo šifre i kasa je spremna" : "Zarada Pakz programa — Dušan & Pavle";
+  } catch {}
+}
+$("#setupShow").addEventListener("change", (e) => { $("#setupDusan").type = $("#setupPavle").type = e.target.checked ? "text" : "password"; });
+$("#setupForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const dusan = $("#setupDusan").value, pavle = $("#setupPavle").value;
+  const btn = $("#setupForm button[type=submit]");
+  $("#setupError").textContent = "";
+  if (dusan.length < 6 || pavle.length < 6) { $("#setupError").textContent = "Svaka šifra mora imati bar 6 znakova."; return; }
+  btn.disabled = true;
+  try {
+    await api("setup", { method: "POST", body: JSON.stringify({ dusan, pavle }) });
+    const r = await api("login", { method: "POST", body: JSON.stringify({ user: "dusan", password: dusan }) });
+    S.token = r.token; S.me = r.user;
+    store.set("token", r.token); store.set("me", r.user); store.set("lastUser", r.user);
+    $("#setupDusan").value = $("#setupPavle").value = "";
+    $("#setupForm").hidden = true; $("#loginForm").hidden = false;
+    showApp();
+    setTimeout(() => { toast("Kasa je spremna!", "Šifre su postavljene", "gold", "crown"); confetti(1.4); sound("level"); }, 400);
+  } catch (e) { $("#setupError").textContent = e.message; }
+  finally { btn.disabled = false; }
+});
+
+if (S.token && S.me) showApp(); else showLogin();

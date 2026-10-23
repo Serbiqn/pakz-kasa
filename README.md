@@ -9,15 +9,11 @@ Privatni sajt za beleženje zarade Pakz programa (Dušan & Pavle).
 - Svaka izmena se beleži u „Promene" (ko, kada, šta), obrisano se može vratiti
 - Backup u JSON fajl i vraćanje iz njega
 
-## Netlify podešavanje
+## Podešavanje
 
-Site configuration → Environment variables:
+Ništa ne treba podešavati na Netlify-u:
+- pri prvom otvaranju sajt traži da se postave šifre za Dušana i Pavla
+- tajni ključ za login sajt pravi sam
+- Discord webhook se lepi u meniju sajta (avatar → Discord kanal)
 
-| Promenljiva | Vrednost |
-|---|---|
-| `DUSAN_PASSWORD` | Dušanova šifra |
-| `PAVLE_PASSWORD` | Pavlova šifra |
-| `SESSION_SECRET` | dugačak nasumičan tekst |
-| `DISCORD_WEBHOOK_URL` | (opciono) webhook Discord kanala — svaka uplata, trošak, izmena i brisanje se šalje u kanal |
-
-Podaci se čuvaju u Netlify Blobs (store `pakz-kasa`). Build komanda nije potrebna, publish folder je `public`.
+Sve se čuva u Netlify Blobs (store `pakz-kasa`). Opciono, env promenljive `DUSAN_PASSWORD`, `PAVLE_PASSWORD`, `SESSION_SECRET` i `DISCORD_WEBHOOK_URL` imaju prednost ako postoje.

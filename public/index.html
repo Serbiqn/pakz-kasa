@@ -24,6 +24,21 @@
       <h1 class="login-title">Pakz <span class="grad">Kasa</span></h1>
       <p class="login-sub">Zarada Pakz programa — Dušan &amp; Pavle</p>
 
+      <form id="setupForm" class="setup" hidden autocomplete="off">
+        <div class="setup-note"><b>Prvo podešavanje</b>Postavi šifre za oboje. Pavlu posle samo pošalji njegovu — svako je kasnije može promeniti u meniju.</div>
+        <label class="field">
+          <span class="field-label">Šifra za Dušana</span>
+          <input id="setupDusan" type="password" autocomplete="new-password" minlength="6" required />
+        </label>
+        <label class="field">
+          <span class="field-label">Šifra za Pavla</span>
+          <input id="setupPavle" type="password" autocomplete="new-password" minlength="6" required />
+        </label>
+        <label class="show-pw"><input type="checkbox" id="setupShow" /> Prikaži šifre</label>
+        <p id="setupError" class="form-error" role="alert"></p>
+        <button class="btn primary block lg" type="submit"><span>Postavi šifre i uđi</span></button>
+      </form>
+
       <form id="loginForm" autocomplete="on">
         <div class="who" role="radiogroup" aria-label="Ko se loguje">
           <label class="who-tile dusan">
@@ -72,7 +87,8 @@
             <div class="menu-head" id="meName">Dušan</div>
             <button role="menuitem" id="exportBtn"><svg><use href="#i-download"/></svg>Sačuvaj backup</button>
             <label role="menuitem" class="as-btn"><svg><use href="#i-upload"/></svg>Vrati backup<input type="file" id="importFile" accept="application/json,.json" hidden /></label>
-            <button role="menuitem" id="discordBtn"><svg><use href="#i-zap"/></svg>Testiraj Discord</button>
+            <button role="menuitem" id="discordBtn"><svg><use href="#i-zap"/></svg>Discord kanal</button>
+            <button role="menuitem" id="pwBtn"><svg><use href="#i-lock"/></svg>Promeni šifru</button>
             <button role="menuitem" id="logoutBtn"><svg><use href="#i-logout"/></svg>Odjavi se</button>
           </div>
         </div>
@@ -237,6 +253,21 @@
         <button type="button" class="btn ghost danger" id="deleteBtn" hidden><svg><use href="#i-trash"/></svg>Obriši</button>
         <button type="submit" class="btn primary lg grow" id="saveBtn"><span>Sačuvaj</span></button>
       </div>
+    </form>
+  </div>
+
+  <!-- mali dijalog: Discord / šifra -->
+  <div class="modal" id="mini" hidden>
+    <div class="modal-backdrop" data-mini-close></div>
+    <form class="sheet glass mini" id="miniForm" role="dialog" aria-modal="true" aria-labelledby="miniTitle" novalidate>
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h2 id="miniTitle"></h2>
+        <button type="button" class="icon-btn" data-mini-close aria-label="Zatvori"><svg><use href="#i-x"/></svg></button>
+      </div>
+      <div id="miniBody"></div>
+      <p class="form-error" id="miniError" role="alert"></p>
+      <div class="sheet-actions" id="miniActions"></div>
     </form>
   </div>
 

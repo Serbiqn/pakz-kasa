@@ -9,8 +9,9 @@
 //   GET  /api/export                          backup (JSON)
 //   POST /api/import           { entries }    vrati backup
 //
-// Env promenljive (Netlify > Site configuration > Environment variables):
-//   DUSAN_PASSWORD, PAVLE_PASSWORD, SESSION_SECRET (bilo koji dugačak random tekst)
+// Podešavanje bez Netlify-a: šifre se postavljaju na sajtu pri prvom otvaranju,
+// tajni ključ se pravi sam, Discord webhook se lepi u meniju sajta (sve u Blobs).
+// Opciono (ima prednost ako postoji): env DUSAN_PASSWORD, PAVLE_PASSWORD, SESSION_SECRET, DISCORD_WEBHOOK_URL
 
 import { getStore } from "@netlify/blobs";
 import crypto from "node:crypto";
@@ -35,8 +36,42 @@ const json = (body, status = 200) =>
 
 const env = (k) => (globalThis.Netlify?.env?.get(k) ?? process.env[k] ?? "").trim();
 
+// ---------- Podešavanja (šifre, tajni ključ, Discord) čuvaju se u Blobs ----------
+let CFG = null;
+async function cfg(force) {
+  if (CFG && !force) return CFG;
+  const s = store();
+  let c = await s.get("config", { type: "json" });
+  if (!c || !c.secret) {
+    const fresh = { ...(c || {}), secret: crypto.randomBytes(32).toString("hex"), users: c?.users || {} };
+    const w = await s.setJSON("config", fresh, c ? {} : { onlyIfNew: true });
+    c = w?.modified === false ? await s.get("config", { type: "json" }) : fresh;
+  }
+  c.users ||= {};
+  CFG = c;
+  return c;
+}
+async function saveCfg(patch) {
+  const c = { ...(await cfg(true)), ...patch };
+  await store().setJSON("config", c);
+  CFG = c;
+  return c;
+}
+const hashPw = (pw, salt = crypto.randomBytes(16).toString("hex")) =>
+  ({ salt, hash: crypto.scryptSync(String(pw), salt, 32).toString("hex") });
+function checkStored(rec, pw) {
+  if (!rec?.salt || !rec?.hash) return false;
+  const h = crypto.scryptSync(String(pw), rec.salt, 32);
+  const want = Buffer.from(rec.hash, "hex");
+  return h.length === want.length && crypto.timingSafeEqual(h, want);
+}
+const hasPassword = (u) => !!(env(USERS[u].env) || CFG?.users?.[u]?.hash);
+const needsSetup = () => !hasPassword("dusan") && !hasPassword("pavle");
+const webhook = () => env("DISCORD_WEBHOOK_URL") || CFG?.discordWebhook || "";
+const validHook = (h) => /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(h || "");
+
 function secret() {
-  return env("SESSION_SECRET") || `${env("DUSAN_PASSWORD")}|${env("PAVLE_PASSWORD")}|pakz-kasa`;
+  return env("SESSION_SECRET") || CFG?.secret || "pakz-kasa-fallback";
 }
 function sign(payload) {
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -196,8 +231,8 @@ function totals(entries) {
 }
 
 async function discord(req, { action, by, entry, before, entries }) {
-  const hook = env("DISCORD_WEBHOOK_URL");
-  if (!hook || !/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\//.test(hook)) return;
+  const hook = webhook();
+  if (!validHook(hook)) return false;
   const who = USERS[by]?.name || by;
   let content;
   if (action === "add") content = line(entry);
@@ -243,13 +278,33 @@ export default async (req) => {
   const method = req.method;
 
   try {
+    await cfg(true);
+
+    if (path === "setup" && method === "GET") {
+      return json({ needsSetup: needsSetup() });
+    }
+
+    // prvo podešavanje: postavljaju se šifre za oba korisnika, samo jednom
+    if (path === "setup" && method === "POST") {
+      await cfg(true);
+      if (!needsSetup()) return json({ error: "Šifre su već postavljene." }, 409);
+      const { dusan, pavle } = await req.json().catch(() => ({}));
+      if (String(dusan || "").length < 6 || String(pavle || "").length < 6)
+        return json({ error: "Svaka šifra mora imati bar 6 znakova." }, 400);
+      if (dusan === pavle) return json({ error: "Šifre za Dušana i Pavla moraju biti različite." }, 400);
+      await saveCfg({ users: { dusan: hashPw(dusan), pavle: hashPw(pavle) }, setupAt: new Date().toISOString() });
+      return json({ ok: true });
+    }
+
     if (path === "login" && method === "POST") {
       const { user, password } = await req.json().catch(() => ({}));
       const u = USERS[user];
-      const expected = u && env(u.env);
       if (!u) return json({ error: "Izaberi korisnika." }, 400);
-      if (!expected) return json({ error: `Šifra za ${u.name} nije podešena na Netlify-u (${u.env}).` }, 500);
-      if (!safeEqual(password || "", expected)) {
+      const envPw = env(u.env);
+      const rec = CFG.users?.[user];
+      if (!envPw && !rec?.hash) return json({ error: `Šifra za ${u.name} još nije postavljena.` }, 400);
+      const ok = envPw ? safeEqual(password || "", envPw) : checkStored(rec, password || "");
+      if (!ok) {
         await new Promise((r) => setTimeout(r, 600));
         return json({ error: "Pogrešna šifra." }, 401);
       }
@@ -263,6 +318,28 @@ export default async (req) => {
     const me = auth.u;
     const now = new Date().toISOString();
 
+    if (path === "password" && method === "POST") {
+      const { current, next } = await req.json().catch(() => ({}));
+      if (env(USERS[me].env)) return json({ error: "Šifra je podešena na Netlify-u, tamo se i menja." }, 400);
+      if (!checkStored(CFG.users?.[me], current || "")) return json({ error: "Trenutna šifra nije tačna." }, 401);
+      if (String(next || "").length < 6) return json({ error: "Nova šifra mora imati bar 6 znakova." }, 400);
+      await saveCfg({ users: { ...CFG.users, [me]: hashPw(next) } });
+      return json({ ok: true });
+    }
+
+    if (path === "settings" && method === "GET") {
+      const h = webhook();
+      return json({ discord: validHook(h), discordFromEnv: !!env("DISCORD_WEBHOOK_URL"), discordHint: h ? "…" + h.slice(-6) : "" });
+    }
+
+    if (path === "settings" && method === "POST") {
+      const { discordWebhook } = await req.json().catch(() => ({}));
+      const h = String(discordWebhook ?? "").trim();
+      if (h && !validHook(h)) return json({ error: "To ne liči na Discord webhook link (https://discord.com/api/webhooks/…)." }, 400);
+      await saveCfg({ discordWebhook: h });
+      return json({ ok: true, discord: !!h });
+    }
+
     if (path === "rate" && method === "GET") {
       return json(await getRate(url.searchParams.get("date")));
     }
@@ -273,7 +350,7 @@ export default async (req) => {
     }
 
     if (path === "discord-test" && method === "POST") {
-      if (!env("DISCORD_WEBHOOK_URL")) return json({ error: "DISCORD_WEBHOOK_URL nije podešen na Netlify-u." }, 400);
+      if (!validHook(webhook())) return json({ error: "Discord kanal još nije povezan (Meni → Discord kanal)." }, 400);
       const { data } = await load();
       const ok = await discord(req, { action: "test", by: me, entries: data.entries });
       return ok ? json({ ok: true }) : json({ error: "Discord je odbio poruku — proveri webhook URL." }, 502);
